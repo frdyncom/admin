@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Dashboard Realtime GPS</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+<style>
+html, body {
+  margin:0; padding:0; height:100%; width:100%;
+  font-family:"Share Tech Mono", monospace;
+  background:#000; color:#00ff88;
+}
+#container { display:flex; height:100vh; width:100vw; }
+#sidebar {
+  width:320px; min-width:250px; max-width:400px;
+  background:#111; overflow-y:auto;
+  border-right:2px solid #00ff88;
+  padding:10px; box-sizing:border-box;
+}
+#map { flex:1; }
+h2 { text-align:center; margin:10px 0; font-size:18px; }
+#searchBox {
+  width:100%; padding:8px; margin-bottom:10px;
+  border:1px solid #00ff88; background:#000;
+  color:#0ff; font-size:14px; border-radius:4px;
+  box-sizing:border-box;
+}
+.user {
+  padding:10px; border-bottom:1px solid #00ff88;
+  cursor:pointer; transition:0.2s;
+  word-wrap:break-word;
+}
+.user:hover { background:#222; }
+.user b { color:#0ff; font-size:14px; }
+.online { color:#0f0; font-weight:bold; }
+.offline { color:#f00; font-weight:bold; }
+.user span { font-size:12px; display:block; margin-top:2px; }
+
+/* Responsive */
+@media(max-width:768px){
+  #container { flex-direction:column; }
+  #sidebar {
+    width:100%; height:250px; max-height:280px;
+    border-right:none; border-bottom:2px solid #00ff88;
+  }
+  #map { flex:1; height:calc(100% - 250px); }
+}
+</style>
+</head>
+<body>
+
+<div id="container">
+  <div id="sidebar">
+    <h2>Active Users</h2>
+    <input type="text" id="searchBox" placeholder="Cari user / device...">
+    <div id="userList"></div>
+  </div>
+  <div id="map"></div>
+</div>
+<script>
+// ===== Password Protect =====
+const pass = prompt("Masukkan password admin:");
+if(pass !== "fertol123"){ // Ganti sesuai password lo
+  document.body.innerHTML = "<h2 style='color:red;text-align:center;margin-top:50px;'>❌ Akses Ditolak</h2>";
+  throw new Error("Unauthorized");
+}
+</script>
+
+
+<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+  // ===== Firebase Config =====
+  const firebaseConfig = {
+    apiKey: "AIzaSyAeG3eB_zyWapubCKyIFaaF50aXF8GhipE",
+    authDomain: "tracking-project-d4fa6.firebaseapp.com",
+    databaseURL: "https://tracking-project-d4fa6-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "tracking-project-d4fa6",
+    storageBucket: "tracking-project-d4fa6.firebasestorage.app",
+    messagingSenderId: "953812351968",
+    appId: "1:953812351968:web:17ae63a8d1ece032e68985",
+    measurementId: "G-0HWLTMWJ4T"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const database = firebase.database();
+
+  // ===== Peta =====
+  const map = L.map('map').setView([-6.2,106.8],5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap contributors' }).addTo(map);
+
+  const markers = {};
+  const userList = document.getElementById('userList');
+  const searchBox = document.getElementById('searchBox');
+  const ONLINE_TIMEOUT = 60 * 1000; // 1 menit
+  function isOnline(lastTime){ return Date.now() - lastTime < ONLINE_TIMEOUT; }
+
+  // Format nama device
+  function formatDeviceName(name="Unknown"){
+    name = name.toLowerCase();
+    if(name.includes("android")) return "📱 Android Device";
+    if(name.includes("iphone")) return "📱 iPhone";
+    if(name.includes("ipad")) return "📱 iPad";
+    if(name.includes("windows")) return "💻 Windows PC";
+    if(name.includes("mac")) return "💻 MacOS Device";
+    return "🔧 " + name.charAt(0).toUpperCase() + name.slice(1);
+  }
+
+  let allUsers = [];
+
+  // ===== Dashboard Realtime =====
+  database.ref("users").on("value", snapshot=>{
+    const data = snapshot.val();
+    if(!data) { userList.innerHTML = ""; return; }
+
+    allUsers = Object.entries(data).sort((a,b)=>b[1].time - a[1].time);
+    renderUserList();
+  });
+
+  function renderUserList(){
+    const keyword = searchBox.value.toLowerCase();
+    userList.innerHTML = "";
+
+    allUsers.forEach(([id, info])=>{
+      const { lat, lng, time, accuracy, deviceName, battery, network } = info;
+      const online = isOnline(time);
+      const realDevice = formatDeviceName(deviceName);
+
+      if(keyword && !id.toLowerCase().includes(keyword) && !realDevice.toLowerCase().includes(keyword)) return;
+
+      if(markers[id]){
+        markers[id].setLatLng([lat,lng]);
+        markers[id].getPopup().setContent(`
+          <b>${id}</b><br>
+          Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)}<br>
+          Akurasi: ±${Math.round(accuracy)} m<br>
+          Device: ${realDevice}<br>
+          Battery: ${battery || "?"}%<br>
+          Network: ${network || "?"}<br>
+          Status: <span class="${online?'online':'offline'}">${online?'Online':'Offline'}</span><br>
+          Last update: ${new Date(time).toLocaleString()}
+        `);
+        markers[id].setOpacity(online?1:0.5);
+      } else {
+        markers[id] = L.marker([lat,lng],{riseOnHover:true, opacity:online?1:0.5}).addTo(map)
+          .bindPopup(`
+            <b>${id}</b><br>
+            Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)}<br>
+            Akurasi: ±${Math.round(accuracy)} m<br>
+            Device: ${realDevice}<br>
+            Battery: ${battery || "?"}%<br>
+            Network: ${network || "?"}<br>
+            Status: <span class="${online?'online':'offline'}">${online?'Online':'Offline'}</span><br>
+            Last update: ${new Date(time).toLocaleString()}
+          `);
+      }
+
+      const div = document.createElement('div');
+      div.className = "user";
+      div.innerHTML = `<b>${id}</b>
+                       <span>Lat: ${lat.toFixed(5)}, Lng: ${lng.toFixed(5)}</span>
+                       <span>Akurasi: ±${Math.round(accuracy)} m</span>
+                       <span>Device: ${realDevice}</span>
+                       <span>Battery: ${battery || "?"}%</span>
+                       <span>Network: ${network || "?"}</span>
+                       <span>Status: <span class="${online?'online':'offline'}">${online?'Online':'Offline'}</span></span>
+                       <span>Last update: ${new Date(time).toLocaleString()}</span>`;
+      div.onclick = ()=>{ map.setView([lat,lng],16); markers[id].openPopup(); };
+      userList.appendChild(div);
+    });
+  }
+
+  searchBox.addEventListener("input", renderUserList);
+</script>
+</body>
+</html>
